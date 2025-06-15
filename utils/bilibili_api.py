@@ -10,9 +10,10 @@ from urllib.parse import urlencode
 
 import qrcode
 import requests
-from config import LoginConfig, UserInfo
-from exceptions import BilibiliError
-from logger import setup_logger
+
+from .config import LoginConfig, UserInfo
+from .exceptions import BilibiliError
+from .logger import setup_logger
 
 # 配置常量
 APPKEY = "4409e2ce8ffd12b8"
@@ -68,15 +69,36 @@ class BilibiliAPI:
         """从 cookies 中提取用户的 uid 信息"""
         return self.get_cookies().get("DedeUserID", "")
 
+    def sign_params(self, params) -> str:
+        mixin_key = self.get_mixin_key()
+        ae = "&".join([f"{key}={value}" for key, value in params.items()])
+        w_rid = md5((ae + mixin_key).encode(encoding="utf-8")).hexdigest()
+        return w_rid
+
+    def get_vids(self, mid, pn) -> dict:
+        """获取用户动态信息"""
+        try:
+            wts = int(time.time())
+            params = {"mid": mid, "pn": pn, "wts": wts}
+            w_rid = self.sign_params(params)
+            url = f"https://api.bilibili.com/x/space/wbi/arc/search?" + \
+                  f"mid={mid}&pn={pn}&w_rid={w_rid}&wts={wts}"
+            response = self._request("get", url, headers=self.api_headers)
+
+            if response and response.get("code") == 0:
+                data = response["data"]
+                return data
+
+        except Exception as e:
+            self.logger.error(f"获取用户(mid={mid})视频信息失败：{e}")
+        return {}
+
     def get_user_info(self) -> bool:
         """用于获取用户信息，并返回当前的登录状态"""
         try:
-            mixin_key = self.get_mixin_key()
             wts = int(time.time())
-
             params = {"mid": self.get_uid(), "wts": wts}
-            ae = "&".join([f"{key}={value}" for key, value in params.items()])
-            w_rid = md5((ae + mixin_key).encode(encoding="utf-8")).hexdigest()
+            w_rid = self.sign_params(params)
             url = "https://api.bilibili.com/x/space/wbi/acc/info?" + \
                   f"mid={self.get_uid()}&w_rid={w_rid}&wts={wts}"
             response = self._request("get", url, headers=self.api_headers)
