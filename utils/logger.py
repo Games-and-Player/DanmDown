@@ -2,7 +2,6 @@
 
 import logging
 import os
-from typing import Optional
 
 
 def setup_logger(name: str, log_file: str, level: int = logging.INFO) -> logging.Logger:

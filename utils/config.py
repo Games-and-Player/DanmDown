@@ -3,14 +3,12 @@
 from dataclasses import dataclass
 from dataclasses import field
 
-from requests.utils import default_user_agent
-
 
 @dataclass
 class LoginConfig:
     """登录配置类"""
-    cookie_file: str = "../data/cookie.json"
-    log_file: str = "../data/login.log"
+    cookie_file: str = "./data/cookie.json"
+    log_file: str = "./data/login.log"
     max_retry: int = 5
 
 
