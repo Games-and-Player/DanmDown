@@ -2,6 +2,7 @@
 
 import json
 import os
+import random
 import time
 from functools import reduce
 from hashlib import md5
@@ -29,13 +30,22 @@ class BilibiliAPI:
         self.user_info = UserInfo()
         self.logger = setup_logger("bilibili_api", self.config.log_file)
 
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"]
+
         self.api_headers = {
-            'authority': "api.live.bilibili.com",
-            'accept': "text/html,application/xhtml+xml,application/xml;q=0.9," +
+            # 'authority': "api.live.bilibili.com",
+            # 'Host': "api.live.bilibili.com",
+            'Accept': "text/html,application/xhtml+xml,application/xml;q=0.9," +
                       "image/avif,image/webp,image/apng,*/*;q=0.8,application/" +
-                      "signed-exchange;v=b3;q=0.9",
-            'user-agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" +
-                          "(KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36"
+                      "signed-exchange;v=b3;q=0.7",
+            "Accept-Encoding": "identity",
+            'Connection': 'keep-alive',
+            "Cache-Control": "max-age=0",
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': random.choice(user_agents)
         }
 
     def _get_sign(self, params: Dict[str, Any]) -> str:
@@ -60,7 +70,8 @@ class BilibiliAPI:
                 else:
                     return response
             except requests.RequestException as e:
-                self.logger.warning(f"请求失败（尝试 {attempt + 1} / {retry}）:{e}")
+                self.logger.warning(f"请求{url}失败（尝试 {attempt + 1} / {retry}）:{e}")
+                time.sleep(5 * (attempt + 1))
                 if attempt + 1 == retry:
                     self.logger.error(f"最终请求失败：{url}")
         return None
@@ -71,26 +82,55 @@ class BilibiliAPI:
 
     def sign_params(self, params) -> str:
         mixin_key = self.get_mixin_key()
-        ae = "&".join([f"{key}={value}" for key, value in params.items()])
-        w_rid = md5((ae + mixin_key).encode(encoding="utf-8")).hexdigest()
+        filtered_params = {}
+        for key, value in params.items():
+            if value is not None and value != "":
+                filtered_params[key] = str(value)
+        sorted_params = sorted(filtered_params.items())
+        query_string = "&".join([f"{key}={value}" for key, value in sorted_params])
+        w_rid = md5((query_string + mixin_key).encode(encoding="utf-8")).hexdigest()
+        # ae = "&".join([f"{key}={value}" for key, value in params.items()])
+        # w_rid = md5((ae + mixin_key).encode(encoding="utf-8")).hexdigest()
         return w_rid
+
+    def get_tags(self, aid):
+        url = f"https://api.bilibili.com/x/web-interface/view/detail/tag?" + \
+              f"aid={aid}"
+        response = self._request("get", url=url, headers=self.api_headers)
+        return response
+
+    def get_cid(self, aid):
+        url = f"https://api.bilibili.com/x/player/pagelist?" + \
+              f"aid={aid}"
+        response = self._request("get", url=url, headers=self.api_headers)
+        return response
+
+    def get_vinfo(self, aid):
+        # url = f"https://api.bilibili.com/x/web-interface/view?" + \
+        #       f"aid={aid}"
+        url = f"https://api.bilibili.com/x/web-interface/view/detail?" + \
+              f"aid={aid}"
+        response = self._request("get", url=url, headers=self.api_headers)
+        print(response)
+        return response
 
     def get_vids(self, mid, pn) -> dict:
         """获取用户动态信息"""
-        try:
-            wts = int(time.time())
-            params = {"mid": mid, "pn": pn, "wts": wts}
-            w_rid = self.sign_params(params)
-            url = f"https://api.bilibili.com/x/space/wbi/arc/search?" + \
-                  f"mid={mid}&pn={pn}&w_rid={w_rid}&wts={wts}"
-            response = self._request("get", url, headers=self.api_headers)
-
-            if response and response.get("code") == 0:
-                data = response["data"]
-                return data
-
-        except Exception as e:
-            self.logger.error(f"获取用户(mid={mid})视频信息失败：{e}")
+        for _ in range(5):
+            try:
+                wts = int(time.time())
+                params = {"mid": mid, "pn": pn, "wts": wts}
+                w_rid = self.sign_params(params)
+                url = f"https://api.bilibili.com/x/space/wbi/arc/search?" + \
+                      f"mid={mid}&pn={pn}&w_rid={w_rid}&wts={wts}"
+                response = self._request("get", url, headers=self.api_headers)
+                if response and response.get("code") == 0:
+                    data = response["data"]
+                    return data
+                else:
+                    continue
+            except Exception as e:
+                self.logger.error(f"获取用户(mid={mid})视频信息失败：{e}")
         return {}
 
     def get_user_info(self) -> bool:
@@ -236,6 +276,16 @@ class BilibiliAPI:
         temp_cookie = {}
         for item in poll_response["data"]["cookie_info"]["cookies"]:
             temp_cookie[item["name"]] = item["value"]
+
+        # 获取 buvid3/4
+        buvid_url = "https://api.bilibili.com/x/frontend/finger/spi"
+        response = self._request("get", buvid_url, headers=self.api_headers)
+        if not response or response.get("code") != 0:
+            self.logger.error("获取 buvid3/4 失败")
+        else:
+            temp_cookie["buvid3"] = response["data"]["b_3"]
+            temp_cookie["buvid4"] = response["data"]["b_4"]
+
         os.makedirs(os.path.dirname(cookie_file), exist_ok=True)
         with open(cookie_file, "w", encoding="utf-8") as f:
             json.dump(temp_cookie, f, ensure_ascii=False, indent=2)
